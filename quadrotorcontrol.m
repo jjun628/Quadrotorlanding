@@ -6,7 +6,7 @@ simulation = 1;
 
 
 %% simulation time vector
-tf = 1.25/2;
+tf = 10;
 dt = 0.01;
 t = 0:dt:tf;
 
