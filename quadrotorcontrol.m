@@ -1,4 +1,4 @@
-%% Quadrotor UAV tracking simulation model / period: 21. 9.12. ~ / recent review: 21. 9.21.
+%% Quadrotor UAV tracking simulation model / period: 21. 9.12. ~ / recent review: 21. 9.30.
 %% Task
 % 1. Add disturbances (Wind)
 % 2. Linearization, LQR controller
@@ -63,14 +63,14 @@ x_dp = readmatrix('motion_platform.txt');  % dt=0.01, 10 seconds periodic motion
 
 %% initial & final states
 altitude = 1;
-x_i = [0.2159; 0.2159; 0.2159+altitude; 0; 0; 0];  % initial state
-x_f = [0.2159; 0.2159; 0.2159+altitude; 0; 0; 0];  % final state
+edge = 0.2159;
+x_i = [edge; edge; edge+altitude; 0; 0; 0];  % initial state
+x_f = [edge; edge; edge+altitude; 0; 0; 0];  % final state
 xdot_i = [0; 0; 0; 0; 0; 0];  % initial velocity
 xdot_f = [0; 0; 0; 0; 0; 0];  % final velocity
 
 %% rotation estimation values
-cof = 0.5  % coefficient factor   0.5 /m
-
+cof = 0.5;  % coefficient factor   0.5 /m
 
 %% Trajectory maker
 k = t/tf;
@@ -108,9 +108,13 @@ for i=1:length(t)
     
     %% getting desired position from the camera(x, y values) w/ sensor noise
     noise = -0.0015 + (0.0015+0.0015)*rand(2,1);  % interval (a,b) with the formula a + (b-a).*rand(N,1)
-    x_d(1:2,i) = x_dp(1:2,i) + noise;
+    x_d(1:2,i) = x_dp(1:2,i) + noise;  % difference between quadrotor and platform center(x,y) except for z component
     vel_d = [zeros(6,1) diff(x_d,1,2)]/dt;
     acc_d = [zeros(6,1) diff(vel_d,1,2)]/dt;
+    
+    %% Camera image vector
+    for m=1:4, mmC(:,m,i)=R*mmR(:,m,i)*cof*(x(3,i)-edge); end   % considering quadrotor rotation, coefficient factor
+    mmC(3,:) = 0;
 
     %% desired roll and pitch
     x_d(4,i) = 1/g * (acc_d(1,i)*sin(x(6,i)) - acc_d(2,i)*cos(x(6,i)));
@@ -150,11 +154,10 @@ end
 
 %% plotting
 if simulation,
-    figure; view(-70,30); grid on; hold on; j=1; xlabel('x');ylabel('y');zlabel('z'); xlim([0.2159-0.4,0.2159+0.4]),ylim([0.2159-0.4,0.2159+0.4]),zlim([0,0.2159+1.5])
-
+    figure; view(-70,30); grid on; hold on; j=1; xlabel('x');ylabel('y');zlabel('z'); xlim([edge-0.2,edge+0.2]),ylim([edge-0.2,edge+0.2]),zlim([0-0.1,edge+1.2])
     %% quadrotor part
     % plot3(x_d(1,:),x_d(2,:),x_d(3,:),'r');
-    p1=plot3(x(1,j),x(2,j),x(3,j),'ro');
+    p1=plot3(x(1,j),x(2,j),x(3,j),'g*');
     p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
     p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
     %% platform part
@@ -182,10 +185,18 @@ if simulation,
     mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
     mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
     mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
-    pause; delete(p1);delete(p2);delete(p3); delete(platform); delete(mark)
+    %% Camera image part
+    camera(1) = plot3([x_dp(1,j)+mmC(1,1,j),x_dp(1,j)+mmC(1,3,j)],[x_dp(2,j)+mmC(2,1,j),x_dp(2,j)+mmC(2,3,j)],[mmC(3,1,j)+x(3,j)-0.1,mmC(3,3,j)+x(3,j)-0.1],'r','MarkerSize',8);
+    camera(2) = plot3([x_dp(1,j)+mmC(1,2,j),x_dp(1,j)+mmC(1,4,j)],[x_dp(2,j)+mmC(2,2,j),x_dp(2,j)+mmC(2,4,j)],[mmC(3,2,j)+x(3,j)-0.1,mmC(3,4,j)+x(3,j)-0.1],'r','MarkerSize',8); 
+    camera(3) = plot3(x_dp(1,j)+mmC(1,1,j),x_dp(2,j)+mmC(2,1,j),mmC(3,1,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+    camera(4) = plot3(x_dp(1,j)+mmC(1,2,j),x_dp(2,j)+mmC(2,2,j),mmC(3,2,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+    camera(5) = plot3(x_dp(1,j)+mmC(1,3,j),x_dp(2,j)+mmC(2,3,j),mmC(3,3,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+    camera(6) = plot3(x_dp(1,j)+mmC(1,4,j),x_dp(2,j)+mmC(2,4,j),mmC(3,4,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+    camera(7) = plot3((x_dp(1,j)+mmC(1,1,j)+x_dp(1,j)+mmC(1,3,j))/2,(x_dp(2,j)+mmC(2,1,j)+x_dp(2,j)+mmC(2,3,j))/2,(mmC(3,1,j)+mmC(3,3,j)+x(3,j)-0.1+x(3,j)-0.1)/2,'ro','MarkerSize',3); 
+    pause; delete(p1);delete(p2);delete(p3); delete(platform); delete(mark); delete(camera)
     for j=1:length(t)
         %% quadrotor part
-        p1=plot3(x(1,j),x(2,j),x(3,j),'ro');
+        p1=plot3(x(1,j),x(2,j),x(3,j),'g*');
         p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
         p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
         %% platform part
@@ -213,11 +224,19 @@ if simulation,
         mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
         mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
         mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
+        %% Camera image part
+        camera(1) = plot3([x_dp(1,j)+mmC(1,1,j),x_dp(1,j)+mmC(1,3,j)],[x_dp(2,j)+mmC(2,1,j),x_dp(2,j)+mmC(2,3,j)],[mmC(3,1,j)+x(3,j)-0.1,mmC(3,3,j)+x(3,j)-0.1],'r','MarkerSize',8);
+        camera(2) = plot3([x_dp(1,j)+mmC(1,2,j),x_dp(1,j)+mmC(1,4,j)],[x_dp(2,j)+mmC(2,2,j),x_dp(2,j)+mmC(2,4,j)],[mmC(3,2,j)+x(3,j)-0.1,mmC(3,4,j)+x(3,j)-0.1],'r','MarkerSize',8); 
+        camera(3) = plot3(x_dp(1,j)+mmC(1,1,j),x_dp(2,j)+mmC(2,1,j),mmC(3,1,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(4) = plot3(x_dp(1,j)+mmC(1,2,j),x_dp(2,j)+mmC(2,2,j),mmC(3,2,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(5) = plot3(x_dp(1,j)+mmC(1,3,j),x_dp(2,j)+mmC(2,3,j),mmC(3,3,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(6) = plot3(x_dp(1,j)+mmC(1,4,j),x_dp(2,j)+mmC(2,4,j),mmC(3,4,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(7) = plot3((x_dp(1,j)+mmC(1,1,j)+x_dp(1,j)+mmC(1,3,j))/2,(x_dp(2,j)+mmC(2,1,j)+x_dp(2,j)+mmC(2,3,j))/2,(mmC(3,1,j)+mmC(3,3,j)+x(3,j)-0.1+x(3,j)-0.1)/2,'ro','MarkerSize',3); 
         drawnow
-        delete(p1);delete(p2);delete(p3);delete(platform);delete(mark)
+        delete(p1);delete(p2);delete(p3);delete(platform);delete(mark);delete(camera)
     end
         %% quadrotor part
-        p1=plot3(x(1,j),x(2,j),x(3,j),'ro');
+        p1=plot3(x(1,j),x(2,j),x(3,j),'g*');
         p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
         p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
         %% platform part
@@ -240,11 +259,19 @@ if simulation,
         %% mark part
         mark(1) = plot3([x_dp(1,j)+mmR(1,1,j),x_dp(1,j)+mmR(1,3,j)],[x_dp(2,j)+mmR(2,1,j),x_dp(2,j)+mmR(2,3,j)],[x_dp(3,j)+mmR(3,1,j),x_dp(3,j)+mmR(3,3,j)],'b','MarkerSize',8);
         mark(2) = plot3([x_dp(1,j)+mmR(1,2,j),x_dp(1,j)+mmR(1,4,j)],[x_dp(2,j)+mmR(2,2,j),x_dp(2,j)+mmR(2,4,j)],[x_dp(3,j)+mmR(3,2,j),x_dp(3,j)+mmR(3,4,j)],'b','MarkerSize',8); 
-        mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3); 
+        mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3);  
         mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',3); 
         mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
         mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
         mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
+        %% Camera image part
+        camera(1) = plot3([x_dp(1,j)+mmC(1,1,j),x_dp(1,j)+mmC(1,3,j)],[x_dp(2,j)+mmC(2,1,j),x_dp(2,j)+mmC(2,3,j)],[mmC(3,1,j)+x(3,j)-0.1,mmC(3,3,j)+x(3,j)-0.1],'r','MarkerSize',8);
+        camera(2) = plot3([x_dp(1,j)+mmC(1,2,j),x_dp(1,j)+mmC(1,4,j)],[x_dp(2,j)+mmC(2,2,j),x_dp(2,j)+mmC(2,4,j)],[mmC(3,2,j)+x(3,j)-0.1,mmC(3,4,j)+x(3,j)-0.1],'r','MarkerSize',8); 
+        camera(3) = plot3(x_dp(1,j)+mmC(1,1,j),x_dp(2,j)+mmC(2,1,j),mmC(3,1,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(4) = plot3(x_dp(1,j)+mmC(1,2,j),x_dp(2,j)+mmC(2,2,j),mmC(3,2,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(5) = plot3(x_dp(1,j)+mmC(1,3,j),x_dp(2,j)+mmC(2,3,j),mmC(3,3,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(6) = plot3(x_dp(1,j)+mmC(1,4,j),x_dp(2,j)+mmC(2,4,j),mmC(3,4,j)+x(3,j)-0.1,'ro','MarkerSize',3); 
+        camera(7) = plot3((x_dp(1,j)+mmC(1,1,j)+x_dp(1,j)+mmC(1,3,j))/2,(x_dp(2,j)+mmC(2,1,j)+x_dp(2,j)+mmC(2,3,j))/2,(mmC(3,1,j)+mmC(3,3,j)+x(3,j)-0.1+x(3,j)-0.1)/2,'ro','MarkerSize',3); 
 end
 
 %% RK4 method
