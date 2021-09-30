@@ -1,4 +1,8 @@
 %% Quadrotor UAV tracking simulation model / period: 21. 9.12. ~ / recent review: 21. 9.21.
+%% Task
+% 1. Add disturbances (Wind)
+% 2. Linearization, LQR controller
+
 clear all; close all; clc
 
 graphs = 1;
@@ -13,16 +17,23 @@ t = 0:dt:tf;
 %% variables
 g = 9.81;  % gravitational accleration: m/s^2
 m = 0.03;     % drone mass: kg
+disturbance = [5; 0; 0];    % m/s,  10m/s = 36km/h
 L = 0.046;    % arm length / meter
 LL = [0, -L,  0,  L;      % drone arm vector in the body frame
       L,  0, -L,  0;
       0,  0,  0,  0];
-  
+
 eer = 0.05;        % moving platform edge size: 10cm
 eeh = 0.005;       % moving platform height
 bb= [ -eer,  eer,  eer, -eer, -eer,  eer,  eer, -eer;    % platform vector
       -eer, -eer,  eer,  eer, -eer, -eer,  eer,  eer;
        eeh,  eeh,  eeh,  eeh, -eeh, -eeh, -eeh, -eeh];  
+   
+%% mark vectors on the platform
+mml= 0.04; 
+mm = [  mml,    0, -mml,    0;
+          0,  mml,    0, -mml;
+        eeh,  eeh,  eeh,  eeh];
 
 %% control gains
 kp  = 100; kd  =  20;      % position controller
@@ -57,6 +68,9 @@ x_f = [0.2159; 0.2159; 0.2159+altitude; 0; 0; 0];  % final state
 xdot_i = [0; 0; 0; 0; 0; 0];  % initial velocity
 xdot_f = [0; 0; 0; 0; 0; 0];  % final velocity
 
+%% rotation estimation values
+cof = 0.5  % coefficient factor   0.5 /m
+
 
 %% Trajectory maker
 k = t/tf;
@@ -82,18 +96,18 @@ for i=1:length(t)
     for k=1:4
         LLR(:,k,i) = R*LL(:,k);
     end
-     
+    
+    %% platform rotation
     phip=x_dp(4,i); thep=x_dp(5,i); psip=x_dp(6,i);
     c1p=cos(phip); c2p=cos(thep); c3p=cos(psip); s1p=sin(phip); s2p=sin(thep); s3p=sin(psip);
     Rp = [c2p*c3p,                    -c2p*s3p,     s2p;
           c1p*s3p+c3p*s1p*s2p,  c1p*c3p-s1p*s2p*s3p, -c2p*s1p;
           s1p*s3p-c1p*c3p*s2p,  c3p*s1p+c1p*s2p*s3p,  c1p*c2p]; 
-    for m=1:8
-        bbR(:,m,i) = Rp*bb(:,m);  
-    end
+    for m=1:8, bbR(:,m,i) = Rp*bb(:,m); end   % platform edges
+    for m=1:4, mmR(:,m,i) = Rp*mm(:,m); end   % mark vectors
     
     %% getting desired position from the camera(x, y values) w/ sensor noise
-    noise = -0.001 + (0.001+0.001)*rand(2,1);  % interval (a,b) with the formula a + (b-a).*rand(N,1)
+    noise = -0.0015 + (0.0015+0.0015)*rand(2,1);  % interval (a,b) with the formula a + (b-a).*rand(N,1)
     x_d(1:2,i) = x_dp(1:2,i) + noise;
     vel_d = [zeros(6,1) diff(x_d,1,2)]/dt;
     acc_d = [zeros(6,1) diff(vel_d,1,2)]/dt;
@@ -110,10 +124,9 @@ for i=1:length(t)
                kp6*(errp(6)) + kd6*(errd(6))];
     
     %% position controller
-    rd = [x_d(1:3,i);x_d(6,i)];
-    
     U1 = (m*(acc_d(3,i) - kp*errp(3) - kd*errd(3)) + m*g);
     
+    %% Control input
     U=[U1;U2];
     U_rec(:,i)=U;
     
@@ -145,7 +158,7 @@ if simulation,
     p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
     p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
     %% platform part
-    pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',5);
+%     pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',1);
     % upper shpae
     platform(1) = plot3([x_dp(1,j)+bbR(1,1,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,1,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,1,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
     platform(2) = plot3([x_dp(1,j)+bbR(1,3,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,3,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,3,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
@@ -161,13 +174,22 @@ if simulation,
     platform(10)= plot3([x_dp(1,j)+bbR(1,6,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,6,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,6,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
     platform(11)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
     platform(12)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,5,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,5,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,5,j)],'b','LineWidth',1.2);
-    pause; delete(p1);delete(p2);delete(p3); delete(pp1); delete(platform)
+    %% mark part
+    mark(1) = plot3([x_dp(1,j)+mmR(1,1,j),x_dp(1,j)+mmR(1,3,j)],[x_dp(2,j)+mmR(2,1,j),x_dp(2,j)+mmR(2,3,j)],[x_dp(3,j)+mmR(3,1,j),x_dp(3,j)+mmR(3,3,j)],'b','MarkerSize',8);
+    mark(2) = plot3([x_dp(1,j)+mmR(1,2,j),x_dp(1,j)+mmR(1,4,j)],[x_dp(2,j)+mmR(2,2,j),x_dp(2,j)+mmR(2,4,j)],[x_dp(3,j)+mmR(3,2,j),x_dp(3,j)+mmR(3,4,j)],'b','MarkerSize',8); 
+    mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3); 
+    mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',3); 
+    mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
+    mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
+    mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
+    pause; delete(p1);delete(p2);delete(p3); delete(platform); delete(mark)
     for j=1:length(t)
+        %% quadrotor part
         p1=plot3(x(1,j),x(2,j),x(3,j),'ro');
         p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
         p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
         %% platform part
-        pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',5);
+%         pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',1);
         % upper shpae
         platform(1) = plot3([x_dp(1,j)+bbR(1,1,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,1,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,1,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
         platform(2) = plot3([x_dp(1,j)+bbR(1,3,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,3,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,3,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
@@ -183,15 +205,23 @@ if simulation,
         platform(10)= plot3([x_dp(1,j)+bbR(1,6,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,6,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,6,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
         platform(11)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
         platform(12)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,5,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,5,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,5,j)],'b','LineWidth',1.2);
+        %% mark part
+        mark(1) = plot3([x_dp(1,j)+mmR(1,1,j),x_dp(1,j)+mmR(1,3,j)],[x_dp(2,j)+mmR(2,1,j),x_dp(2,j)+mmR(2,3,j)],[x_dp(3,j)+mmR(3,1,j),x_dp(3,j)+mmR(3,3,j)],'b','MarkerSize',8);
+        mark(2) = plot3([x_dp(1,j)+mmR(1,2,j),x_dp(1,j)+mmR(1,4,j)],[x_dp(2,j)+mmR(2,2,j),x_dp(2,j)+mmR(2,4,j)],[x_dp(3,j)+mmR(3,2,j),x_dp(3,j)+mmR(3,4,j)],'b','MarkerSize',8); 
+        mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3); 
+        mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',3); 
+        mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
+        mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
+        mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
         drawnow
-        delete(p1);delete(p2);delete(p3);delete(pp1);delete(platform)
+        delete(p1);delete(p2);delete(p3);delete(platform);delete(mark)
     end
+        %% quadrotor part
         p1=plot3(x(1,j),x(2,j),x(3,j),'ro');
         p2=plot3([x(1,j)+LLR(1,1,j),x(1,j)+LLR(1,3,j)],[x(2,j)+LLR(2,1,j),x(2,j)+LLR(2,3,j)],[x(3,j)+LLR(3,1,j),x(3,j)+LLR(3,3,j)],'k');
         p3=plot3([x(1,j)+LLR(1,2,j),x(1,j)+LLR(1,4,j)],[x(2,j)+LLR(2,2,j),x(2,j)+LLR(2,4,j)],[x(3,j)+LLR(3,2,j),x(3,j)+LLR(3,4,j)],'k');
-        pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',3);
         %% platform part
-        pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',5);
+%         pp1=plot3(x_dp(1,j),x_dp(2,j),x_dp(3,j),'b*','MarkerSize',1);
         % upper shpae
         platform(1) = plot3([x_dp(1,j)+bbR(1,1,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,1,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,1,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
         platform(2) = plot3([x_dp(1,j)+bbR(1,3,j),x_dp(1,j)+bbR(1,2,j)],[x_dp(2,j)+bbR(2,3,j),x_dp(2,j)+bbR(2,2,j)],[x_dp(3,j)+bbR(3,3,j),x_dp(3,j)+bbR(3,2,j)],'b','LineWidth',1.2);
@@ -207,9 +237,14 @@ if simulation,
         platform(10)= plot3([x_dp(1,j)+bbR(1,6,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,6,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,6,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
         platform(11)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,7,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,7,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,7,j)],'b','LineWidth',1.2);
         platform(12)= plot3([x_dp(1,j)+bbR(1,8,j),x_dp(1,j)+bbR(1,5,j)],[x_dp(2,j)+bbR(2,8,j),x_dp(2,j)+bbR(2,5,j)],[x_dp(3,j)+bbR(3,8,j),x_dp(3,j)+bbR(3,5,j)],'b','LineWidth',1.2);
-
-
-    %% plotting a platform
+        %% mark part
+        mark(1) = plot3([x_dp(1,j)+mmR(1,1,j),x_dp(1,j)+mmR(1,3,j)],[x_dp(2,j)+mmR(2,1,j),x_dp(2,j)+mmR(2,3,j)],[x_dp(3,j)+mmR(3,1,j),x_dp(3,j)+mmR(3,3,j)],'b','MarkerSize',8);
+        mark(2) = plot3([x_dp(1,j)+mmR(1,2,j),x_dp(1,j)+mmR(1,4,j)],[x_dp(2,j)+mmR(2,2,j),x_dp(2,j)+mmR(2,4,j)],[x_dp(3,j)+mmR(3,2,j),x_dp(3,j)+mmR(3,4,j)],'b','MarkerSize',8); 
+        mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3); 
+        mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',3); 
+        mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
+        mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
+        mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
 end
 
 %% RK4 method
@@ -232,5 +267,3 @@ function x_prime = ode(X,m,R,U,g,Ig)
               U(3)/Ig(2,2) + (Ig(3,3)-Ig(1,1))*X(10)*X(12)/Ig(2,2);
               U(4)/Ig(3,3) + (Ig(1,1)-Ig(2,2))*X(10)*X(11)/Ig(3,3)];
 end
-
-
