@@ -1,4 +1,4 @@
-%% Quadrotor UAV tracking simulation model / period: 21. 9.12. ~ / recent review: 21. 9.30.
+%% Quadrotor platform tracking and rotation esimation simulation model / period: 21. 9.12. ~ / recent review: 21. 9.30.
 %% Task
 % 1. Add rotation estimation (Function)
 % 2. Add disturbances (Wind)
