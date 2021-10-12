@@ -1,14 +1,14 @@
-%% Quadrotor platform tracking and rotation esimation simulation model / period: 21. 9.12. ~ / recent review: 21. 9.30.
+%% Quadrotor platform tracking and rotation esimation simulation model / period: 21. 9.12. ~ / recent review: 21.10.10.
 %% Task
-% 1. Add rotation estimation (Function)
+% 1. Develop landing controller (CLF-QP)
 % 2. Add disturbances (Wind)
 % 3. Linearization, LQR controller
 
 clear all; close all; clc
 
 graphs = 1;
+graphs_estimation = 1;
 simulation = 1;
-
 
 %% simulation time vector
 tf = 10;
@@ -18,7 +18,8 @@ t = 0:dt:tf;
 %% variables
 g = 9.81;  % gravitational accleration: m/s^2
 m = 0.03;     % drone mass: kg
-disturbance = [5; 0; 0];    % m/s,  10m/s = 36km/h
+dis = [0.000002; -0.000001; 0.000003; 0; 0; 0];    % [forces;torques] / Newton
+
 L = 0.046;    % arm length / meter
 LL = [0, -L,  0,  L;      % drone arm vector in the body frame
       L,  0, -L,  0;
@@ -35,9 +36,15 @@ mml= 0.04;
 mm = [  mml,    0, -mml,    0;
           0,  mml,    0, -mml;
         eeh,  eeh,  eeh,  eeh];
+%% Mark size
+m_size_initial = 3;
+
+%% Landing control values
+landing_control = 0;   % 1: landing control on / 0: off
+running = 1;
 
 %% control gains
-kp  = 100; kd  =  20;      % position controller
+kp  = 100; kd  =  10;      % position controller
 kp4 = 500; kp5 = 500; kp6 = 500; % attitude controller
 kd4 = 10; kd5 = 10; kd6 = 10;
 
@@ -95,7 +102,7 @@ for i=1:length(t)
          c1*s3+c3*s1*s2,  c1*c3-s1*s2*s3, -c2*s1;
          s1*s3-c1*c3*s2,  c3*s1+c1*s2*s3,  c1*c2]; 
     for k=1:4
-        LLR(:,k,i) = R*LL(:,k);
+        LLR(:,k,i) = inv(R)*LL(:,k);
     end
     
     %% platform rotation
@@ -104,58 +111,140 @@ for i=1:length(t)
     Rp = [c2p*c3p,                    -c2p*s3p,     s2p;
           c1p*s3p+c3p*s1p*s2p,  c1p*c3p-s1p*s2p*s3p, -c2p*s1p;
           s1p*s3p-c1p*c3p*s2p,  c3p*s1p+c1p*s2p*s3p,  c1p*c2p]; 
-    for m=1:8, bbR(:,m,i) = Rp*bb(:,m); end   % platform edges
-    for m=1:4, mmR(:,m,i) = Rp*mm(:,m); end   % mark vectors
+    for m=1:8, bbR(:,m,i) = inv(Rp)*bb(:,m); end   % platform edges
+    for m=1:4, mmR(:,m,i) = inv(Rp)*mm(:,m); end   % mark vectors
     
     %% getting desired position from the camera(x, y values) w/ sensor noise
     noise = -0.0015 + (0.0015+0.0015)*rand(2,1);  % interval (a,b) with the formula a + (b-a).*rand(N,1)
-    x_d(1:2,i) = x_dp(1:2,i) + noise;  % difference between quadrotor and platform center(x,y) except for z component
+    noise = 0;
+    x_d(1:2,i) = x_dp(1:2,i) + noise;  % camera sensor noise
     vel_d = [zeros(6,1) diff(x_d,1,2)]/dt;
     acc_d = [zeros(6,1) diff(vel_d,1,2)]/dt;
     
-    %% Camera image vector
-    for m=1:4, mmC(:,m,i)=R*mmR(:,m,i)*cof*(x(3,i)-edge); end   % considering quadrotor rotation, coefficient factor
-    mmC(3,:) = 0;
+    %% Disturbance (where should I add?)
+%     xdot(:,i) = xdot(:,i) + dis;
+    
+    cof = -1/(altitude*2)*(x(3,i)-x_dp(3,i))+1;
 
+    %% Camera image vector
+    for m=1:4, mmC(:,m,i)=R*mmR(:,m,i)*cof; end   % considering quadrotor rotation, coefficient factor
+    mmC_rec(:,:,i) = mmC(:,:,i);   % camera image with z-component
+    mmC(3,:) = 0;  % projected vector is 2D image
+    
+    %% Mark size calculating
+    for k=1:4
+        X(:,k,i) = x_dp(1:3,i) - x(1:3,i) + mmC_rec(:,k,i);
+        X_norm(:,k,i) = norm(X(:,k,i));
+        m_size(:,k,i) = m_size_initial/X_norm(:,k,i);
+    end
+    
+    %% Rotation estimation (q-method)
+    % input : original mark vector(mm), mark vector after the rotation(mmC2)
+    % output: estimated rotation angles(phi_e, the_e, psi_e), translation vector(d)
+    
+    %% calculating z-component of projected vector
+    mmC2 = mmC;  % mmC2 is the projected vector without z component
+    mmC2(3,:) = sqrt( (mml*cof)^2 - mmC2(1,:).^2 - mmC2(2,:).^2 );  % Calculating z-component
+    mmC2 = real(mmC2);
+    
+    %% Determine z-component sign depending on the size of the mark
+    if X_norm(:,1,i) < X_norm(:,3,i), mmC2(3,3,i) = -mmC2(3,3,i);, end
+    if X_norm(:,1,i) == X_norm(:,3,i), end
+    if X_norm(:,1,i) > X_norm(:,3,i), mmC2(3,1,i) = -mmC2(3,1,i);, end
+    
+    if X_norm(:,2,i) < X_norm(:,4,i), mmC2(3,4,i) = -mmC2(3,4,i);, end
+    if X_norm(:,2,i) == X_norm(:,4,i), end
+    if X_norm(:,2,i) > X_norm(:,4,i), mmC2(3,2,i) = -mmC2(3,2,i);, end
+    
+%     mmC2(3,1:2,i) = -mmC2(3,1:2,i);    % first solution of z
+%     mmC2(3,3:4,i) = -mmC2(3,3:4,i);    % second solution of z
+    
+    [phi_e,the_e,psi_e,d] = rotation_estimation_func(mm,mmC2(:,:,i));
+    rot_rec(:,i) = [phi_e;the_e;psi_e];   % save estimated rotation
+    d_rec(:,i) = d;
+    
     %% desired roll and pitch
     x_d(4,i) = 1/g * (acc_d(1,i)*sin(x(6,i)) - acc_d(2,i)*cos(x(6,i)));
     x_d(5,i) = 1/g * (acc_d(1,i)*cos(x(6,i)) + acc_d(2,i)*sin(x(6,i)));
 
     errp = x_d(:,i)-x(:,i);
     errd = vel_d(:,i)-xdot(:,i);
+    
     %% attitude controller
     U2 = Ig * [kp4*(errp(4)) + kd4*(errd(4));
                kp5*(errp(5)) + kd5*(errd(5));
                kp6*(errp(6)) + kd6*(errd(6))];
+    U1 = (m*(acc_d(3,i) - kp*errp(3) - kd*errd(3)) + m*g);         
+           
+    %% landing, judgement
+    if abs(phi_e) <= pi/18 && abs(the_e) <= pi/18, landing_control = 1;  
+    else landing_control = 0;
+    end
     
-    %% position controller
-    U1 = (m*(acc_d(3,i) - kp*errp(3) - kd*errd(3)) + m*g);
+    %% if landing succeed
+    if abs(x(3,i) - x_dp(3,i)) <= 1e-4, running = 0; ddd = x(1:2,i)-x_dp(1:2,i);  end
+
+    %% position controller (w/ altitude control for landing)
+    if running,
+        if landing_control == 0, 
+            kp  = 100; kd  =  10;
+            x_d_landing(3,:) = x(3,i);
+            vel_d_landing(3,:) = [zeros(1,1) diff(x_d(3,:),1,2)]/dt;
+            errp(3) = x_d_landing(3,i) - x(3,i); 
+            errd(3) = vel_d_landing(3,i)-xdot(3,i);
+            U1 = (m*(acc_d(3,i) - kp*errp(3) - kd*errd(3)) + m*g);
+        end
+        if landing_control == 1, 
+            kp  = 100; kd  =  20; 
+            k = t/tf;
+            x_i=x(3,i);
+            x_f=x_dp(3,i);
+            x_d_landing(3,:) = x_i + (x_f-x_i) * (10*k.^3 - 15*k.^4 + 6*k.^5); % 5th order trajectory
+            vel_d_landing(3,:) = [zeros(1,1) diff(x_d(3,:),1,2)]/dt;
+            errp(3) = x_d_landing(3,i) - x(3,i); 
+            errd(3) = vel_d_landing(3,i)-xdot(3,i);
+            U1 = (m*(acc_d(3,i) - kp*errp(3) - kd*errd(3)) + m*g); 
+        end
+    end
+    
+    %% after landing
+    if running == 0, U1=0; U2=zeros(3,1); x(1:2,i) = ddd+x_dp(1:2,i); x(3:6,i) = x_dp(3:6,i); end
     
     %% Control input
     U=[U1;U2];
     U_rec(:,i)=U;
-    
+        
     %% Solving Dynamic equation
-    [x(:,i+1), xdot(:,i+1)] = rk4_ode([x(:,i); xdot(:,i)],m,R,U,g,Ig,dt);
+    [x(:,i+1), xdot(:,i+1)] = rk4_ode([x(:,i); xdot(:,i)],m,R,U,g,Ig,dt,dis);
     xddot = [zeros(6,1) diff(xdot,1,2)]/dt;
 end
+
+x = x(:,1:end-1);
 
 %% quadrotor graphs
 if graphs,
     figure;
     subplot(2,1,1); hold on; grid on
-    plot(t,x(1,1:end-1),'r');plot(t, x_dp(1,1:end),'r--')
-    plot(t,x(2,1:end-1),'b');plot(t, x_dp(2,1:end),'b--')
-    plot(t,x(3,1:end-1),'g');plot(t, x_dp(3,1:end),'g--')
+    plot(t,x(1,1:end),'r');plot(t, x_dp(1,1:end),'r--')
+    plot(t,x(2,1:end),'b');plot(t, x_dp(2,1:end),'b--')
+    plot(t,x(3,1:end),'g');plot(t, x_dp(3,1:end),'g--')
     subplot(2,1,2); hold on; grid on
-    plot(t,x(4,1:end-1)*180/pi,'r');plot(t, x_d(4,1:end)*180/pi,'r--')
-    plot(t,x(5,1:end-1)*180/pi,'b');plot(t, x_d(5,1:end)*180/pi,'b--')
-    plot(t,x(6,1:end-1)*180/pi,'g');plot(t, x_d(6,1:end)*180/pi,'g--')
+    plot(t,x(4,1:end)*180/pi,'r');
+    plot(t,x(5,1:end)*180/pi,'b');
+    plot(t,x(6,1:end)*180/pi,'g');
+end
+
+%% rotation estimation graphs
+if graphs_estimation,
+    figure; hold on; grid on
+    plot(t,x_dp(4,:),'r--');plot(t, rot_rec(1,:),'r')
+    plot(t,x_dp(5,:),'b--');plot(t, rot_rec(2,:),'b')
+    plot(t,x_dp(6,:),'g--');plot(t, rot_rec(3,:),'g')
 end
 
 %% plotting
 if simulation,
-    figure; view(-70,30); grid on; hold on; j=1; xlabel('x');ylabel('y');zlabel('z'); xlim([edge-0.2,edge+0.2]),ylim([edge-0.2,edge+0.2]),zlim([0-0.1,edge+1.2])
+    figure; view(-70,30); grid on; hold on; j=1; xlabel('x');ylabel('y');zlabel('z'); xlim([edge-0.2,edge+0.2]),ylim([edge-0.2,edge+0.2]),zlim([0-0.1,altitude+edge+0.5])
     %% quadrotor part
     % plot3(x_d(1,:),x_d(2,:),x_d(3,:),'r');
     p1=plot3(x(1,j),x(2,j),x(3,j),'g*');
@@ -181,10 +270,10 @@ if simulation,
     %% mark part
     mark(1) = plot3([x_dp(1,j)+mmR(1,1,j),x_dp(1,j)+mmR(1,3,j)],[x_dp(2,j)+mmR(2,1,j),x_dp(2,j)+mmR(2,3,j)],[x_dp(3,j)+mmR(3,1,j),x_dp(3,j)+mmR(3,3,j)],'b','MarkerSize',8);
     mark(2) = plot3([x_dp(1,j)+mmR(1,2,j),x_dp(1,j)+mmR(1,4,j)],[x_dp(2,j)+mmR(2,2,j),x_dp(2,j)+mmR(2,4,j)],[x_dp(3,j)+mmR(3,2,j),x_dp(3,j)+mmR(3,4,j)],'b','MarkerSize',8); 
-    mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',3); 
-    mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',3); 
-    mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',3); 
-    mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',3); 
+    mark(3) = plot3(x_dp(1,j)+mmR(1,1,j),x_dp(2,j)+mmR(2,1,j),x_dp(3,j)+mmR(3,1,j),'bo','MarkerSize',m_size(1)); 
+    mark(4) = plot3(x_dp(1,j)+mmR(1,2,j),x_dp(2,j)+mmR(2,2,j),x_dp(3,j)+mmR(3,2,j),'bo','MarkerSize',m_size(2)); 
+    mark(5) = plot3(x_dp(1,j)+mmR(1,3,j),x_dp(2,j)+mmR(2,3,j),x_dp(3,j)+mmR(3,3,j),'bo','MarkerSize',m_size(3)); 
+    mark(6) = plot3(x_dp(1,j)+mmR(1,4,j),x_dp(2,j)+mmR(2,4,j),x_dp(3,j)+mmR(3,4,j),'bo','MarkerSize',m_size(4)); 
     mark(7) = plot3((x_dp(1,j)+mmR(1,1,j)+x_dp(1,j)+mmR(1,3,j))/2,(x_dp(2,j)+mmR(2,1,j)+x_dp(2,j)+mmR(2,3,j))/2,(x_dp(3,j)+mmR(3,1,j)+x_dp(3,j)+mmR(3,3,j))/2,'bo','MarkerSize',3); 
     %% Camera image part
     camera(1) = plot3([x_dp(1,j)+mmC(1,1,j),x_dp(1,j)+mmC(1,3,j)],[x_dp(2,j)+mmC(2,1,j),x_dp(2,j)+mmC(2,3,j)],[mmC(3,1,j)+x(3,j)-0.1,mmC(3,3,j)+x(3,j)-0.1],'r','MarkerSize',8);
@@ -276,22 +365,22 @@ if simulation,
 end
 
 %% RK4 method
-function [pos,vel] = rk4_ode(X,m,R,U,g,Ig,dt)
-    f1=ode(X,m,R,U,g,Ig);
-    f2=ode(X+dt/2 *f1,m,R,U,g,Ig);
-    f3=ode(X+dt/2 *f2,m,R,U,g,Ig);
-    f4=ode(X+dt * f3,m,R,U,g,Ig);
+function [pos,vel] = rk4_ode(X,m,R,U,g,Ig,dt,dis)
+    f1=ode(X,m,R,U,g,Ig,dis);
+    f2=ode(X+dt/2 *f1,m,R,U,g,Ig,dis);
+    f3=ode(X+dt/2 *f2,m,R,U,g,Ig,dis);
+    f4=ode(X+dt * f3,m,R,U,g,Ig,dis);
     XX = (X + dt * (f1/6 + f2/3 +f3/3 + f4/6));
     pos = XX(1:6,1); vel = XX(7:12,1);
 end
 
 %% equations
-function x_prime = ode(X,m,R,U,g,Ig)
+function x_prime = ode(X,m,R,U,g,Ig,dis)
    x_prime = [X(7:12); 
-              ( -sin(X(4))*sin(X(6))-cos(X(4))*sin(X(5))*cos(X(6)) ) * U(1)/m;
-              ( sin(X(4))*cos(X(6))-cos(X(4))*sin(X(5))*sin(X(6)) ) * U(1)/m;
-              g - (cos(X(4))*cos(X(5))) * U(1)/m;
-              U(2)/Ig(1,1) + (Ig(2,2)-Ig(3,3))*X(11)*X(12)/Ig(1,1);
-              U(3)/Ig(2,2) + (Ig(3,3)-Ig(1,1))*X(10)*X(12)/Ig(2,2);
-              U(4)/Ig(3,3) + (Ig(1,1)-Ig(2,2))*X(10)*X(11)/Ig(3,3)];
+              ( -sin(X(4))*sin(X(6))-cos(X(4))*sin(X(5))*cos(X(6)) ) * U(1)/m + dis(1)/m;
+              ( sin(X(4))*cos(X(6))-cos(X(4))*sin(X(5))*sin(X(6)) ) * U(1)/m + dis(2)/m;
+              g - (cos(X(4))*cos(X(5))) * U(1)/m + dis(3)/m;
+              U(2)/Ig(1,1) + (Ig(2,2)-Ig(3,3))*X(11)*X(12)/Ig(1,1) + dis(4)/Ig(1,1);
+              U(3)/Ig(2,2) + (Ig(3,3)-Ig(1,1))*X(10)*X(12)/Ig(2,2) + dis(5)/Ig(2,2);
+              U(4)/Ig(3,3) + (Ig(1,1)-Ig(2,2))*X(10)*X(11)/Ig(3,3) + dis(6)/Ig(3,3)];
 end
